@@ -3,6 +3,9 @@ include("./operations.jl")
 # TODO: tensor definition to stabilize fields
 # TODO: must refer the linformer/attention all u need
 
+array_type = Array{Float32}
+Knet.param(d...; init = xavier_uniform, atype = array_type) = Param(atype(init(d...)))
+
 # 1 - Embedding
 struct Embed
     w::Any
@@ -27,53 +30,110 @@ struct Dense
     b::Any
     σ::Function
 end
-Dense(inputsize::Int, outputsize::Int, σ::Function = identity) =
-    Dense(param(outputsize, inputsize), param0(outputsize), σ)
-(d::Dense)(x) = d.σ(d.w * mat(x, dims = 1) .+ d.b)
+Dense(inputsize::Int, outputsize::Int; σ = identity) =
+    Dense(param(outputsize, inputsize), param(outputsize), σ)
+(d::Dense)(x) = d.σ.(d.w * x .+ d.b)
 
 # 3 - LayerNorm
 struct LayerNorm
     γ::Any
     β::Any
 end
-LayerNorm(layer_length::Int, layer_dim::Int) =
-    LayerNorm(param(layer_length, layer_dim), param0(layer_dim))
-(ln::LayerNorm)(x) = ln.γ * x .+ ln.β # TODO: ensure mat operation is not needed
+LayerNorm(batchsize) = LayerNorm(param(batchsize), param(batchsize))
+(ln::LayerNorm)(x) = one2three(ln.β, one2three(ln.γ, normalize(x, 1, 2)), f = +)
 
-# 4 - MH(L)A
+# FFN - refer Chain structure by 541
+# TODO: ensure L1 & L2 regularization is needed
+struct FFN
+    L1::Dense
+    L2::Dense
+end
+FFN(embed_dim::Int, ffn_depth::Int = 4) = FFN(
+    Dense(embed_dim, embed_dim * ffn_depth, σ = relu),
+    Dense(embed_dim * ffn_depth, embed_dim),
+)
+(ffn::FFN)(x) = reshape(
+    permutedims(ffn.L2(ffn.L1(reshape(permutedims(x, (2, 1, 3)), size(x, 2), :))), (2, 1)),
+    size(x),
+)
+# 4 - MHA
 struct MHA
-    head_num::Int       # number of attention heads
-    W_Q::Any
-    W_K::Any
-    W_V::Any
-    W_O::Any
-    E::Any              # Linformer : Linear Projection Matrix E
-    F::Any              # Linformer : Linear Projection Matrix F
+    projections::Array{Any,1}
 end
 
 # Naive MHA
-MHA(embed_dim::Int, head_num::Int = 1, hidden_dim::Int = Int(floor(embed_dim / head_num))) =
-    MHA(
-        head_num,
-        param(embed_dim, hidden_dim),
-        param(embed_dim, hidden_dim),
-        param(embed_dim, hidden_dim),
-        param(head_num * hidden_dim, embed_dim),
-    )
+MHA(embed_dim::Int; head_num::Int = 1, hidden_dim::Int = Int(floor(embed_dim / head_num))) =
+    MHA(vcat(
+        [param(embed_dim, hidden_dim, head_num) for i = 1:3],
+        [param(head_num * hidden_dim, embed_dim)],
+    ))
 
-# Linformer: MHLA
-MHLA(
+# MHLA
+MHA(
     embed_dim::Int,
-    seq_length::Int,
-    projected_dimension::Int,
+    proj_dim::Int,
+    seq_length::Int;
     head_num::Int = 1,
     hidden_dim::Int = Int(floor(embed_dim / head_num)),
-) = MHA(
-    head_num,
-    param(embed_dim, hidden_dim),
-    param(embed_dim, hidden_dim),
-    param(embed_dim, hidden_dim),
-    param(head_num * hidden_dim, embed_dim),
-    param(projected_dimension, seq_length),
-    param(projected_dimension, seq_length),
+) = MHA(vcat(
+    [param(embed_dim, hidden_dim, head_num) for i = 1:3],
+    [param(head_num * hidden_dim, embed_dim)],
+    [param(proj_dim, seq_length, head_num) for i = 1:2],
+))
+
+# TODO: Add arguments regarding different strategies of parameter sharing
+function (mha::MHA)(
+    cell;
+    mem = (cell, cell),
+    a_type = array_type,
+    masked::Bool = false,
+    mask_token::Float32 == -Inf32,
 )
+    linear = length(mha.projections) > 4
+
+    T, E, B = size(cell)
+    _, hidden, head_num = size(mha.projections[1])
+
+    K, V = mem
+    Q = cell
+
+    head_container = a_type(undef, T, hidden, B, head_num)
+    mask = a_type(undef, T, T - (linear ? (T - size(mha.projections[5], 1)) : 0))
+    masked && (fill!(mask, mask_token); triu!(mask, 1))
+
+
+
+    head(A, B, C) =
+        masked ?
+        bmm(
+            softmax(
+                bmm(A, permutedims(B, (2, 1, 3))) / sqrt(Float32(hidden)) .+ mask,
+                dims = 2,
+            ),
+            C,
+        ) :
+        bmm(softmax(bmm(A, permutedims(B, (2, 1, 3))) / sqrt(Float32(hidden)), dims = 2), C)
+
+
+    if linear
+        for i = 1:head_num
+            head_container[:, :, :, i] = head(
+                three2two(Q, mha.projections[1][:, :, i]),
+                three2two(
+                    two2three(mha.projections[5][:, :, i], K),
+                    mha.projections[2][:, :, i],
+                ),
+                three2two(two2three(mha.projections[6], V), mha.projections[3][:, :, i]),
+            )
+        end
+    else
+        for i = 1:head_num
+            head_container[:, :, :, i] = head(
+                three2two(Q, mha.projections[1][:, :, i]),
+                three2two(K, mha.projections[2][:, :, i]),
+                three2two(V, mha.projections[3][:, :, i]),
+            )
+        end
+    end
+    three2two(reshape(head_container, T, :, B), mha.projections[4])
+end
