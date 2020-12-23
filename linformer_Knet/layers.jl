@@ -1,4 +1,5 @@
 using Knet
+using LinearAlgebra: triu!
 include("./operations.jl")
 # TODO: tensor definition to stabilize fields
 # TODO: must refer the linformer/attention all u need
@@ -87,7 +88,7 @@ function (mha::MHA)(
     mem = (cell, cell),
     a_type = array_type,
     masked::Bool = false,
-    mask_token::Float32 == -Inf32,
+    mask_token::Float32 = -Inf32,
 )
     linear = length(mha.projections) > 4
 
