@@ -24,7 +24,7 @@ function Vocab(
         for line in eachline(f)
             sentence = tokenizer(strip(lowercase(line)), [' '], keepempty = false)
             for word in sentence
-                word == unk || word == eos && continue # They are default ones to be added later
+                (word == unk || word == eos) && continue # They are default ones to be added later
                 vocab_freq[word] = get!(vocab_freq, word, 0) + 1
             end
         end
@@ -57,4 +57,4 @@ function Vocab(
     Vocab(w2i, i2w, 1, 2, tokenizer)
 end
 
-# TODO: A smarter version of tokenizer could be implemented - or we can adapt an already exoisting strategy
+# TODO: A smarter version of tokenizer could be implemented - or we can adapt an already existing strategy
