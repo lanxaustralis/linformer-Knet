@@ -5,14 +5,16 @@ include("./operations.jl")
 # TODO: must refer the linformer/attention all u need
 
 array_type = Array{Float32}
-Knet.param(d...; init = xavier_uniform, atype = array_type) = Param(atype(init(d...)))
+Knet.param(d...; init = xavier_uniform, atype = array_type) =
+    Param(atype(init(d...)))
 
 # 1 - Embedding
 struct Embed
     w::Any
 end
 Embed(vocabsize::Int, embedsize::Int) = Embed(param(embedsize, vocabsize))
-(e::Embed)(x) = permutedims(e.w[:, x], (3, 1, 2)) .+ PE(size(x)[2], size(e.w)[1]) # returns tensor of the form T,E,B
+(e::Embed)(x) =
+    permutedims(e.w[:, x], (3, 1, 2)) .+ PE(size(x)[2], size(e.w)[1]) # returns tensor of the form T,E,B
 
 function PE(inputsize::Int, embedsize::Int)
     PE = zeros(inputsize, embedsize)
@@ -54,7 +56,10 @@ FFN(embed_dim::Int, ffn_depth::Int = 4) = FFN(
     Dense(embed_dim * ffn_depth, embed_dim),
 )
 (ffn::FFN)(x) = reshape(
-    permutedims(ffn.L2(ffn.L1(reshape(permutedims(x, (2, 1, 3)), size(x, 2), :))), (2, 1)),
+    permutedims(
+        ffn.L2(ffn.L1(reshape(permutedims(x, (2, 1, 3)), size(x, 2), :))),
+        (2, 1),
+    ),
     size(x),
 )
 # 4 - MHA
@@ -63,11 +68,16 @@ struct MHA
 end
 
 # Naive MHA
-MHA(embed_dim::Int; head_num::Int = 1, hidden_dim::Int = Int(floor(embed_dim / head_num))) =
-    MHA(vcat(
+MHA(
+    embed_dim::Int;
+    head_num::Int = 1,
+    hidden_dim::Int = Int(floor(embed_dim / head_num)),
+) = MHA(
+    vcat(
         [param(embed_dim, hidden_dim, head_num) for i = 1:3],
         [param(head_num * hidden_dim, embed_dim)],
-    ))
+    ),
+)
 
 # MHLA
 MHA(
@@ -76,11 +86,13 @@ MHA(
     seq_length::Int;
     head_num::Int = 1,
     hidden_dim::Int = Int(floor(embed_dim / head_num)),
-) = MHA(vcat(
-    [param(embed_dim, hidden_dim, head_num) for i = 1:3],
-    [param(head_num * hidden_dim, embed_dim)],
-    [param(proj_dim, seq_length, head_num) for i = 1:2],
-))
+) = MHA(
+    vcat(
+        [param(embed_dim, hidden_dim, head_num) for i = 1:3],
+        [param(head_num * hidden_dim, embed_dim)],
+        [param(proj_dim, seq_length, head_num) for i = 1:2],
+    ),
+)
 
 # TODO: Add arguments regarding different strategies of parameter sharing
 function (mha::MHA)(
@@ -99,7 +111,8 @@ function (mha::MHA)(
     Q = cell
 
     head_container = a_type(undef, T, hidden, B, head_num)
-    mask = a_type(undef, T, T - (linear ? (T - size(mha.projections[5], 1)) : 0))
+    mask =
+        a_type(undef, T, T - (linear ? (T - size(mha.projections[5], 1)) : 0))
     masked && (fill!(mask, mask_token); triu!(mask, 1))
 
 
@@ -108,12 +121,19 @@ function (mha::MHA)(
         masked ?
         bmm(
             softmax(
-                bmm(A, permutedims(B, (2, 1, 3))) / sqrt(Float32(hidden)) .+ mask,
+                bmm(A, permutedims(B, (2, 1, 3))) / sqrt(Float32(hidden)) .+
+                mask,
                 dims = 2,
             ),
             C,
         ) :
-        bmm(softmax(bmm(A, permutedims(B, (2, 1, 3))) / sqrt(Float32(hidden)), dims = 2), C)
+        bmm(
+            softmax(
+                bmm(A, permutedims(B, (2, 1, 3))) / sqrt(Float32(hidden)),
+                dims = 2,
+            ),
+            C,
+        )
 
 
     if linear
@@ -124,7 +144,10 @@ function (mha::MHA)(
                     two2three(mha.projections[5][:, :, i], K),
                     mha.projections[2][:, :, i],
                 ),
-                three2two(two2three(mha.projections[6], V), mha.projections[3][:, :, i]),
+                three2two(
+                    two2three(mha.projections[6], V),
+                    mha.projections[3][:, :, i],
+                ),
             )
         end
     else
