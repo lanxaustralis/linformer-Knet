@@ -29,7 +29,10 @@ Manifest.toml
 # Files from temporary and datasets directories
 temp/
 datasets/
+literature/
+__pycache__/
 
 # Data files
 *.json
 *.txt
+*.raw
